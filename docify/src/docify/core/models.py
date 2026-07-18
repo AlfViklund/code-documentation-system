@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal, Optional
-
+from typing import Annotated, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -37,7 +36,7 @@ class SymbolAnchor(BaseModel):
     body_hash: Optional[str] = None  # sha256 of normalized symbol body
 
 
-Anchor = FileAnchor | SymbolAnchor
+Anchor = Annotated[Union[FileAnchor, SymbolAnchor], Field(discriminator="type")]
 
 
 class Relation(BaseModel):
@@ -71,6 +70,7 @@ class FeatureCheckState(str, Enum):
     STALE = "stale"
     BROKEN = "broken"
     UNIMPLEMENTED = "unimplemented"
+    EMPTY_BODY = "empty-body"
 
 
 class AnchorCheckResult(BaseModel):
@@ -86,7 +86,12 @@ class FeatureCheckResult(BaseModel):
 
     @staticmethod
     def aggregate(feature: Feature, results: list[AnchorCheckResult]) -> "FeatureCheckResult":
-        if not feature.anchors:
+        # Validation for empty/placeholder body in implemented features
+        body_text = (feature.body or "").strip()
+        is_placeholder = "(описание фичи" in body_text.lower() or "(описание " in body_text.lower()
+        if feature.status == FeatureStatus.IMPLEMENTED and (len(body_text) < 80 or is_placeholder):
+            state = FeatureCheckState.EMPTY_BODY
+        elif not feature.anchors:
             state = FeatureCheckState.UNIMPLEMENTED
         elif any(r.state == AnchorState.BROKEN for r in results):
             state = FeatureCheckState.BROKEN

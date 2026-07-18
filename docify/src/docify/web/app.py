@@ -97,7 +97,7 @@ def get_feature(feature_id: str):
         raise HTTPException(status_code=404, detail=f"Feature {feature_id} not found")
 
     checker = Checker(store)
-    result, _ = checker.check_feature(feature, {})
+    result, _ = checker.check_feature(feature)
 
     obj = {
         "id": feature.id,
@@ -257,7 +257,6 @@ def get_spec(spec_id: str):
 @app.post("/api/specs/ingest")
 def ingest_spec(req: IngestSpecRequest):
     store = _store()
-    # Parse YAML frontmatter + markdown body
     import re
     import yaml
     match = re.match(r"\A---\s*\n(.*?)\n---\s*\n?", req.text, re.DOTALL)
@@ -268,21 +267,33 @@ def ingest_spec(req: IngestSpecRequest):
         body = req.text[match.end():]
 
     spec_id = meta.get("id")
+    title = meta.get("title")
+    if not title:
+        first_line = body.strip().splitlines()[0] if body.strip() else "Untitled Spec"
+        title = re.sub(r"^#+\s*", "", first_line).strip()
+
     if not spec_id:
-        raise HTTPException(status_code=400, detail="Specification text must contain an `id` in YAML frontmatter.")
+        spec_id = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "spec-ingested"
 
     parsed_features = []
     for f in meta.get("features", []):
         parsed_features.append(SpecFeatureAction(id=f.get("id"), action=f.get("action", "update")))
 
+    if not parsed_features:
+        body_words = set(re.findall(r"\b[a-zA-Z0-9_-]{3,}\b", req.text.lower()))
+        for feat in store.list_features():
+            feat_words = {feat.id.lower(), feat.title.lower()} | {t.lower() for t in feat.tags}
+            if feat_words & body_words:
+                parsed_features.append(SpecFeatureAction(id=feat.id, action="update"))
+
     spec = Spec(
         id=spec_id,
-        title=meta.get("title", spec_id),
+        title=title,
         received_at=meta.get("received_at", date.today().isoformat()),
         source=req.source or meta.get("source", "web"),
         features=parsed_features,
         status=meta.get("status", "open"),
-        body=body.strip(),
+        body=body,
     )
 
     store.save_spec(spec)
@@ -368,15 +379,28 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception:
             pass
 
+    async def send_heartbeat():
+        try:
+            while True:
+                await asyncio.sleep(15)
+                await websocket.send_text("ping")
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
     watch_task = asyncio.create_task(watch_folders())
+    ping_task = asyncio.create_task(send_heartbeat())
     try:
         while True:
-            # Keep connection alive
-            await websocket.receive_text()
+            msg = await websocket.receive_text()
+            if msg == "pong":
+                pass
     except WebSocketDisconnect:
         pass
     finally:
         watch_task.cancel()
+        ping_task.cancel()
 
 
 # Mount Next.js static files if they exist (out directory)

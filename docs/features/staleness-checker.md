@@ -1,17 +1,40 @@
 ---
 id: staleness-checker
-title: Git & AST Staleness Checker
+title: Git & AST Staleness Checker Engine
 status: implemented
 priority: p0
+tags:
+- checker
+- staleness
+- git
 anchors:
 - type: symbol
   path: docify/src/docify/checker/check.py
   symbol: Checker
   kind: class
-  body_hash: 1c08a7ea48ae636e1fec2043a5556e24487f2f560b7a1b351dabb0c43321745f
+  body_hash: 2055c2bd973fce30983b358499093f61fe4112f710a6698a8ebca13e48ff432b
 updated_at: '2026-07-18'
+verified_commit: f7bbc09f04df53261a13e2b955057316c0057bc7
 ---
 
 ## Что делает
 
-(описание фичи `staleness-checker`)
+Модуль `checker` выполняет основную бизнес-логику системы docify — сопоставление текущего состояния файлов и AST-символов в репозитории с сохраненными хэшами в документации фич.
+
+### Алгоритм проверки
+
+1. **Проверка файла (`FileAnchor`)**:
+   - Сравнивает сохраненный Git blob hash файла с текущим blob hash на диске.
+   - Если хэши совпадают — `FRESH`. Если файл изменен — `STALE`. Если файл не найден — `BROKEN`.
+
+2. **Проверка AST-символа (`SymbolAnchor`)**:
+   - Ищет символ по квалифицированному имени в квалифицированном AST-дереве файла.
+   - Сравнивает `body_hash` с вычисленным хэшем текущего тела.
+   - Если символ не найден по имени, проверяет `find_by_body_hash` — если найдено совпадение тела под новым именем, регистрирует предложение переименования (`rename candidate`).
+
+3. **Валидация наполнения фичи (`EMPTY_BODY`)**:
+   - Если фича помечена как `implemented`, но её текст содержит стандартный шаблон-плейсхолдер или короче 80 символов, фича помечается специальным статусом `EMPTY_BODY`, требующим внимания разработчика.
+
+### Авто-исправление анкоров (`--fix-anchors`)
+
+При вызове `docify check --fix-anchors` система автоматически применяет найденные ремаппинги переименованных символов и файлов прямо в YAML-метаданных файлов `docs/features/*.md`.

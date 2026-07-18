@@ -70,18 +70,25 @@ def init() -> None:
 
 
 @app.command()
-def index(full: bool = typer.Option(False, "--full", help="Reindex everything")) -> None:
-    """(Re)build the anchor index: recompute hashes for all features."""
+def index(full: bool = typer.Option(False, "--full", help="Reindex all features, ignore cached commit")) -> None:
+    """(Re)build the anchor index: recompute hashes for features."""
     store = _store()
     checker = Checker(store)
     count = 0
+    index_data = store.load_index()
+    last_commit = index_data.get("last_indexed_commit") if not full else None
+    changed = checker.git.changed_files(last_commit) if last_commit else None
+
     for feature in store.list_features():
+        anchor_paths = {a.path for a in feature.anchors}
+        if not full and changed is not None and anchor_paths and not (anchor_paths & changed):
+            continue
         checker.reindex_feature(feature)
         store.save_feature(feature)
         count += 1
-    results, _ = checker.check_all(only_changed=False)
+    results, _ = checker.check_all(only_changed=not full)
     checker.save_check_to_index(results)
-    typer.secho(f"indexed {count} feature(s)", fg=typer.colors.GREEN)
+    typer.secho(f"indexed {count} feature(s) (full={full})", fg=typer.colors.GREEN)
 
 
 @app.command()
@@ -283,6 +290,15 @@ def serve(
     """Start the local web dashboard and API server."""
     import uvicorn
     from ..web.app import app as fastapi_app
+    out_path = Path(__file__).parent.parent / "web" / "out"
+    if not out_path.exists():
+        typer.secho(
+            "⚠️  WARNING: Dashboard static UI build not found at docify/web/out.\n"
+            "   The API server will run, but the Web UI will not be served.\n"
+            "   Run 'pnpm build && cp -R out docify/src/docify/web/out' to include the UI.",
+            fg=typer.colors.YELLOW,
+            bold=True,
+        )
     typer.echo(f"Starting docify dashboard at http://{host}:{port}")
     uvicorn.run(fastapi_app, host=host, port=port)
 
@@ -318,8 +334,16 @@ def install(
     typer.secho("\n--- Claude Desktop config block ---", fg=typer.colors.CYAN)
     typer.echo(config_json)
     
-    # Try to write to Claude Desktop config
-    claude_config_path = Path.home() / "Library/Application Support/Claude/claude_desktop_config.json"
+    import os
+    # Try cross-platform Claude Desktop config paths
+    if sys.platform == "win32":
+        app_data = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
+        claude_config_path = Path(app_data) / "Claude" / "claude_desktop_config.json"
+    elif sys.platform == "darwin":
+        claude_config_path = Path.home() / "Library/Application Support/Claude/claude_desktop_config.json"
+    else:
+        claude_config_path = Path.home() / ".config/Claude/claude_desktop_config.json"
+
     if claude_config_path.parent.exists():
         try:
             current_config = {}
@@ -330,8 +354,27 @@ def install(
             typer.secho(f"Successfully configured Claude Desktop at: {claude_config_path}", fg=typer.colors.GREEN)
         except Exception as e:
             typer.secho(f"Failed to auto-configure Claude Desktop: {e}", fg=typer.colors.YELLOW)
-    
+    else:
+        typer.secho(f"Claude Desktop config directory not found at {claude_config_path.parent} (skipped auto-config).", fg=typer.colors.YELLOW)
+
     if project:
+        # Write Cursor project config (.cursor/mcp.json)
+        cursor_dir = store.root / ".cursor"
+        cursor_mcp = cursor_dir / "mcp.json"
+        try:
+            cursor_dir.mkdir(parents=True, exist_ok=True)
+            cursor_config = {}
+            if cursor_mcp.exists():
+                try:
+                    cursor_config = json.loads(cursor_mcp.read_text())
+                except Exception:
+                    cursor_config = {}
+            cursor_config.setdefault("mcpServers", {})["docify"] = mcp_config
+            cursor_mcp.write_text(json.dumps(cursor_config, indent=2))
+            typer.secho(f"Successfully configured Cursor MCP at: {cursor_mcp}", fg=typer.colors.GREEN)
+        except Exception as e:
+            typer.secho(f"Failed to configure Cursor MCP: {e}", fg=typer.colors.YELLOW)
+
         # Write workflow instructions to CLAUDE.md
         claude_md = store.root / "CLAUDE.md"
         workflow_text = (

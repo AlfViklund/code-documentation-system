@@ -161,34 +161,61 @@ status: open
     }
   }
 
+  const [wsStatus, setWsStatus] = useState<'connected' | 'reconnecting' | 'disconnected'>('disconnected')
+
   // Initial load + WS live link
   useEffect(() => {
     loadData()
 
-    // Establish WebSocket Connection
-    let ws: WebSocket
+    let ws: WebSocket | null = null
+    let retryTimeout: NodeJS.Timeout
+    let currentDelay = 1000
+
     const connectWS = () => {
       const host = typeof window !== 'undefined' ? window.location.host : 'localhost:4321'
       const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       ws = new WebSocket(`${wsProtocol}//${host}/api/ws`)
-      ws.onopen = () => addLog('Live link established via WebSocket.')
+
+      ws.onopen = () => {
+        setWsStatus('connected')
+        currentDelay = 1000
+        addLog('Live link established via WebSocket.')
+      }
+
       ws.onmessage = (event) => {
+        if (event.data === 'ping') {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send('pong')
+          }
+          return
+        }
         if (event.data === 'reload') {
           addLog('Index / docs modified on disk. Checking and reloading...')
           loadData()
-          // Refresh active selections if any
           if (selectedFeature) selectFeature(selectedFeature.id)
         }
       }
-      ws.onclose = () => {
-        addLog('Live link disconnected. Retrying in 5 seconds...')
-        setTimeout(connectWS, 5000)
+
+      ws.onerror = (err) => {
+        addLog(`Live link socket error occurred.`)
+      }
+
+      ws.onclose = (event) => {
+        setWsStatus('reconnecting')
+        const reasonStr = event.reason ? `: ${event.reason}` : ''
+        addLog(`Live link disconnected (code ${event.code}${reasonStr}). Retrying in ${Math.round(currentDelay / 1000)}s...`)
+        retryTimeout = setTimeout(() => {
+          connectWS()
+        }, currentDelay)
+        currentDelay = Math.min(currentDelay * 1.5, 30000)
       }
     }
+
     connectWS()
 
     return () => {
       if (ws) ws.close()
+      if (retryTimeout) clearTimeout(retryTimeout)
     }
   }, [])
 
@@ -353,56 +380,85 @@ status: open
   // Get distinct tags
   const tagsList = Array.from(new Set(features.flatMap((f) => f.tags || [])))
 
+  const renderFormattedText = (text: string) => {
+    const parts = text.split(/(\*\*.*?\*\*|`.*?`)/g)
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={i} className="font-bold text-zinc-100">{part.slice(2, -2)}</strong>
+      }
+      if (part.startsWith('`') && part.endsWith('`')) {
+        return <code key={i} className="bg-zinc-900 border border-zinc-700 text-pink-400 px-1 py-0.5 rounded text-xs">{part.slice(1, -1)}</code>
+      }
+      return part
+    })
+  }
+
   // Styled Markdown Viewer
   const renderMarkdown = (md: string) => {
     if (!md) return <p className="text-zinc-500 italic">No description written yet.</p>
     const lines = md.split('\n')
-    return (
-      <div className="space-y-3 font-mono text-zinc-300 text-sm">
-        {lines.map((line, idx) => {
-          if (line.startsWith('# ')) {
-            return (
-              <h1 key={idx} className="text-emerald-400 text-xl font-bold mt-6 mb-2 border-b border-zinc-800 pb-1 glow-cyan">
-                {line.slice(2)}
-              </h1>
-            )
-          }
-          if (line.startsWith('## ')) {
-            return (
-              <h2 key={idx} className="text-pink-400 text-lg font-bold mt-4 mb-2">
-                {line.slice(3)}
-              </h2>
-            )
-          }
-          if (line.startsWith('### ')) {
-            return (
-              <h3 key={idx} className="text-cyan-400 text-base font-bold mt-3">
-                {line.slice(4)}
-              </h3>
-            )
-          }
-          if (line.startsWith('- ') || line.startsWith('* ')) {
-            return (
-              <div key={idx} className="flex items-start ml-4">
-                <span className="text-pink-500 mr-2">»</span>
-                <span>{line.slice(2)}</span>
-              </div>
-            )
-          }
-          if (line.startsWith('> ')) {
-            return (
-              <blockquote key={idx} className="border-l-2 border-cyan-500 bg-cyan-950/20 px-3 py-1 my-2 italic text-cyan-200">
-                {line.slice(2)}
-              </blockquote>
-            )
-          }
-          if (line.trim().startsWith('```')) {
-            return null
-          }
-          return <p key={idx} className="min-h-[1.2rem]">{line}</p>
-        })}
-      </div>
-    )
+    const elements: React.ReactNode[] = []
+    let inCodeBlock = false
+    let codeBlockBuffer: string[] = []
+
+    lines.forEach((line, idx) => {
+      if (line.trim().startsWith('```')) {
+        if (inCodeBlock) {
+          elements.push(
+            <pre key={`code-${idx}`} className="bg-zinc-950 border border-cyan-500/30 p-3 rounded text-xs text-cyan-300 font-mono overflow-x-auto my-3 shadow-[0_0_10px_rgba(34,211,238,0.1)]">
+              <code>{codeBlockBuffer.join('\n')}</code>
+            </pre>
+          )
+          codeBlockBuffer = []
+          inCodeBlock = false
+        } else {
+          inCodeBlock = true
+        }
+        return
+      }
+
+      if (inCodeBlock) {
+        codeBlockBuffer.push(line)
+        return
+      }
+
+      if (line.startsWith('# ')) {
+        elements.push(
+          <h1 key={idx} className="text-emerald-400 text-xl font-bold mt-6 mb-2 border-b border-zinc-800 pb-1">
+            {renderFormattedText(line.slice(2))}
+          </h1>
+        )
+      } else if (line.startsWith('## ')) {
+        elements.push(
+          <h2 key={idx} className="text-pink-400 text-lg font-bold mt-4 mb-2">
+            {renderFormattedText(line.slice(3))}
+          </h2>
+        )
+      } else if (line.startsWith('### ')) {
+        elements.push(
+          <h3 key={idx} className="text-cyan-400 text-base font-bold mt-3 mb-1">
+            {renderFormattedText(line.slice(4))}
+          </h3>
+        )
+      } else if (line.startsWith('- ') || line.startsWith('* ')) {
+        elements.push(
+          <div key={idx} className="flex items-start ml-4 my-1">
+            <span className="text-pink-500 mr-2">»</span>
+            <span>{renderFormattedText(line.slice(2))}</span>
+          </div>
+        )
+      } else if (line.startsWith('> ')) {
+        elements.push(
+          <blockquote key={idx} className="border-l-2 border-cyan-500 bg-cyan-950/20 px-3 py-1 my-2 italic text-cyan-200">
+            {renderFormattedText(line.slice(2))}
+          </blockquote>
+        )
+      } else if (line.trim()) {
+        elements.push(<p key={idx} className="my-1.5 leading-relaxed">{renderFormattedText(line)}</p>)
+      }
+    })
+
+    return <div className="space-y-1 font-mono text-zinc-300 text-sm">{elements}</div>
   }
 
   return (
@@ -415,9 +471,19 @@ status: open
             <Flame className="w-5 h-5 text-cyan-400" />
           </div>
           <div>
-            <h1 className="text-lg font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-pink-500 to-emerald-400">
-              DOCIFY // Live Doc System
-            </h1>
+            <div className="flex items-center space-x-2">
+              <h1 className="text-lg font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-pink-500 to-emerald-400">
+                DOCIFY // Live Doc System
+              </h1>
+              <span className={`text-[9px] font-bold px-2 py-0.5 rounded border flex items-center space-x-1 ${
+                wsStatus === 'connected'
+                  ? 'border-emerald-500/40 bg-emerald-950/40 text-emerald-400'
+                  : 'border-yellow-500/40 bg-yellow-950/40 text-yellow-400 animate-pulse'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${wsStatus === 'connected' ? 'bg-emerald-400' : 'bg-yellow-400'}`} />
+                <span>{wsStatus === 'connected' ? 'LIVE LINK' : 'RECONNECTING'}</span>
+              </span>
+            </div>
             <p className="text-[10px] text-zinc-500 uppercase tracking-widest">
               Living feature documentation & staleness guard
             </p>
@@ -444,10 +510,10 @@ status: open
       </header>
 
       {/* CORE WORKSPACE */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         
         {/* SIDE BAR / SELECTOR VIEW */}
-        <aside className="w-80 border-r border-zinc-800 bg-zinc-950 flex flex-col">
+        <aside className="w-full md:w-80 border-b md:border-b-0 md:border-r border-zinc-800 bg-zinc-950 flex flex-col">
           
           {/* TAB HEADERS */}
           <div className="grid grid-cols-3 border-b border-zinc-800 text-xs">
@@ -662,7 +728,7 @@ status: open
           
           {/* Main workspace logic */}
           {activeTab === 'features' && selectedFeature ? (
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
               
               {/* Document/Content View */}
               <div className="flex-1 overflow-y-auto p-6 border-r border-zinc-800 space-y-6">

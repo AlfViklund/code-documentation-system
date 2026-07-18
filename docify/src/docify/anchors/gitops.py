@@ -61,7 +61,7 @@ class GitRepo:
             changed.update(line for line in diff.splitlines() if line)
         except RuntimeError:
             return None  # commit unknown (rebase, shallow clone) -> full scan
-        status = self._run("status", "--porcelain")
+        status = self._run("status", "--porcelain", "--find-renames")
         for line in status.splitlines():
             entry = line[3:].strip()
             if " -> " in entry:
@@ -78,10 +78,21 @@ class GitRepo:
             out = self._run(
                 "diff", "--name-status", "-M", f"{since_commit}..HEAD"
             )
+            for line in out.splitlines():
+                parts = line.split("\t")
+                if parts and parts[0].startswith("R") and len(parts) == 3:
+                    renames[parts[1]] = parts[2]
         except RuntimeError:
-            return renames
-        for line in out.splitlines():
-            parts = line.split("\t")
-            if parts and parts[0].startswith("R") and len(parts) == 3:
-                renames[parts[1]] = parts[2]
+            pass
+
+        try:
+            status = self._run("status", "--porcelain", "--find-renames")
+            for line in status.splitlines():
+                entry = line[3:].strip()
+                if " -> " in entry:
+                    old, new = entry.split(" -> ", 1)
+                    renames[old.strip('"')] = new.strip('"')
+        except RuntimeError:
+            pass
+
         return renames

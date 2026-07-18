@@ -106,7 +106,7 @@ def get_feature(id: str) -> str:
         return f"Feature `{id}` not found."
 
     checker = Checker(store)
-    result, _ = checker.check_feature(feature, {})
+    result, _ = checker.check_feature(feature)
 
     obj = {
         "id": feature.id,
@@ -140,15 +140,21 @@ def get_feature(id: str) -> str:
 
 
 @mcp.tool()
-def find_features_for_code(path: str, symbol: Optional[str] = None) -> str:
-    """Reverse search: find which features are mapped to a specific code path and optional symbol name."""
+def find_features_for_code(paths: list[str] | str, symbol: Optional[str] = None) -> str:
+    """Reverse search: find which features are mapped to code file paths and optional symbol name."""
     store = _store()
+    if isinstance(paths, str):
+        path_list = [paths]
+    else:
+        path_list = paths
+
     matched = []
+    path_set = set(path_list)
 
     for f in store.list_features():
         has_match = False
         for a in f.anchors:
-            if a.path == path:
+            if a.path in path_set:
                 if symbol:
                     if isinstance(a, SymbolAnchor) and a.symbol == symbol:
                         has_match = True
@@ -332,12 +338,11 @@ def mark_updated(feature_id: str) -> str:
 
 @mcp.tool()
 def ingest_spec(text: str, source: Optional[str] = None) -> str:
-    """Ingest a specification. Expects markdown with YAML frontmatter.
+    """Ingest a specification. Accepts raw markdown or markdown with YAML frontmatter.
 
     Creates docs/specs/<spec_id>.md, and updates actioned features (creates planned, updates implemented to needs-update).
     """
     store = _store()
-    # Parse YAML frontmatter + markdown body
     import re
     match = re.match(r"\A---\s*\n(.*?)\n---\s*\n?", text, re.DOTALL)
     meta = {}
@@ -347,23 +352,35 @@ def ingest_spec(text: str, source: Optional[str] = None) -> str:
         body = text[match.end():]
 
     spec_id = meta.get("id")
+    title = meta.get("title")
+    if not title:
+        first_line = body.strip().splitlines()[0] if body.strip() else "Untitled Spec"
+        title = re.sub(r"^#+\s*", "", first_line).strip()
+
     if not spec_id:
-        return "Error: specification text must contain an `id` in YAML frontmatter."
+        spec_id = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "spec-ingested"
 
     parsed_features = []
     for f in meta.get("features", []):
         parsed_features.append(SpecFeatureAction(id=f.get("id"), action=f.get("action", "update")))
 
+    # Auto-matching heuristic if features list is empty
+    if not parsed_features:
+        body_words = set(re.findall(r"\b[a-zA-Z0-9_-]{3,}\b", text.lower()))
+        for feat in store.list_features():
+            feat_words = {feat.id.lower(), feat.title.lower()} | {t.lower() for t in feat.tags}
+            if feat_words & body_words:
+                parsed_features.append(SpecFeatureAction(id=feat.id, action="update"))
+
     spec = Spec(
         id=spec_id,
-        title=meta.get("title", spec_id),
+        title=title,
         received_at=meta.get("received_at", date.today().isoformat()),
         source=source or meta.get("source", "mcp"),
         features=parsed_features,
         status=meta.get("status", "open"),
-        body=body.strip(),
+        body=body,
     )
-
     store.save_spec(spec)
 
     # Process features actions

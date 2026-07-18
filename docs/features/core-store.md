@@ -3,6 +3,10 @@ id: core-store
 title: Core Storage & Models Engine
 status: implemented
 priority: p0
+tags:
+- core
+- storage
+- pydantic
 anchors:
 - type: symbol
   path: docify/src/docify/core/store.py
@@ -25,8 +29,28 @@ anchors:
   kind: class
   body_hash: 67616556d9e2c5941f0ca109ae5e8107dbac9a5e3e9596eb8cf4c621fba88d75
 updated_at: '2026-07-18'
+verified_commit: f7bbc09f04df53261a13e2b955057316c0057bc7
 ---
 
 ## Что делает
 
-(описание фичи `core-store`)
+Модуль `core` отвечает за персистентное хранение всех данных проекта на диске в прозрачном для человека и Git формате (Markdown с YAML-фронтматтером), а также за строгую Pydantic-валидацию структур в Python.
+
+### Основные компоненты
+
+1. **`Store` (`core/store.py`)**:
+   - Читает и записывает файлы фич в `docs/features/<id>.md`.
+   - Читает и записывает технические спецификации в `docs/specs/<id>.md`.
+   - Читает и записывает элементы техдолга и бэклога в `docs/backlog/<id>.md`.
+   - Поддерживает кэш-индекс `.docify/index.json` с хэшами последних проверок.
+   - Загружает глобальную конфигурацию `.docify/config.yaml`.
+
+2. **`models.py` (`core/models.py`)**:
+   - `Feature`: метаданные фичи, список кодовых якорных ссылок (`FileAnchor` или `SymbolAnchor`), статус реализации и текст документации.
+   - `Spec`: принятые технические задания с датой, источником и списком привязанных действий к фичам (`create`/`update`).
+   - `BacklogItem`: элементы технического долга и перспективного развития (`debt`/`growth`) с приоритетами `P0-P3`.
+   - `FeatureCheckResult`: агрегатор статусов старения (`FRESH`, `STALE`, `BROKEN`, `UNIMPLEMENTED`, `EMPTY_BODY`).
+
+### Архитектурные решения
+
+Все данные хранятся прямо в Git-репозитории пользователя без внешней СУБД. Это гарантирует, что документация версионируется вместе с кодом, а ветки и PR естественным образом переносят изменения в документации.

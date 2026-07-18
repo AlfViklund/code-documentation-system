@@ -82,7 +82,15 @@ class Checker:
             remap = RemapSuggestion(feature_id="", anchor=anchor, new_path=path)
         return AnchorCheckResult(anchor=anchor, state=state, detail=detail), remap
 
-    def check_feature(self, feature: Feature, renames: dict[str, str]) -> tuple[FeatureCheckResult, list[RemapSuggestion]]:
+    def get_renames(self) -> dict[str, str]:
+        """Retrieve git file renames since the last indexed commit."""
+        index = self.store.load_index()
+        last_commit = index.get("last_indexed_commit")
+        return self.git.detect_renames(last_commit) if last_commit else {}
+
+    def check_feature(self, feature: Feature, renames: Optional[dict[str, str]] = None) -> tuple[FeatureCheckResult, list[RemapSuggestion]]:
+        if renames is None:
+            renames = self.get_renames()
         results: list[AnchorCheckResult] = []
         remaps: list[RemapSuggestion] = []
         for anchor in feature.anchors:
