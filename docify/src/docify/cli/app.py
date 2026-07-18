@@ -278,7 +278,7 @@ def mark_updated(feature_id: str) -> None:
 @app.command()
 def serve(
     port: int = typer.Option(4321, "--port", help="Port to run the dashboard on"),
-    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind the dashboard to"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Host to bind the dashboard to"),
 ) -> None:
     """Start the local web dashboard and API server."""
     import uvicorn

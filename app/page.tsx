@@ -24,7 +24,7 @@ import {
 } from 'lucide-react'
 
 // Backend base URL
-const API_BASE = 'http://localhost:4321'
+const API_BASE = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4321'
 
 interface Feature {
   id: string
@@ -168,7 +168,9 @@ status: open
     // Establish WebSocket Connection
     let ws: WebSocket
     const connectWS = () => {
-      ws = new WebSocket(`ws://localhost:4321/api/ws`)
+      const host = typeof window !== 'undefined' ? window.location.host : 'localhost:4321'
+      const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      ws = new WebSocket(`${wsProtocol}//${host}/api/ws`)
       ws.onopen = () => addLog('Live link established via WebSocket.')
       ws.onmessage = (event) => {
         if (event.data === 'reload') {
