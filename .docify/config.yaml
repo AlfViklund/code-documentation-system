@@ -1,0 +1,9 @@
+features_dir: docs/features
+specs_dir: docs/specs
+backlog_dir: docs/backlog
+ignore:
+- node_modules/**
+- .git/**
+- .docify/**
+- dist/**
+- .next/**
